@@ -18,6 +18,54 @@ from PIL import Image
 import math
 import cv2
 
+# Material properties for each object
+materials = {
+    "cabin": {
+        "diffuse": Vector3([0.8, 0.8, 0.8]),  # Wood-like diffuse
+        "specular": Vector3([0.2, 0.2, 0.2])  # Low specular for wood
+    },
+    "rocks": {
+        "diffuse": Vector3([0.6, 0.6, 0.6]),  # Stone-like diffuse
+        "specular": Vector3([0.3, 0.3, 0.3])  # Medium specular for stone
+    },
+    "table": {
+        "diffuse": Vector3([0.7, 0.7, 0.7]),  # Wood-like diffuse
+        "specular": Vector3([0.1, 0.1, 0.1])  # Very low specular for wood
+    },
+    "chair": {
+        "diffuse": Vector3([0.7, 0.7, 0.7]),  # Wood-like diffuse
+        "specular": Vector3([0.1, 0.1, 0.1])  # Very low specular for wood
+    },
+    "firepit": {
+        "diffuse": Vector3([0.9, 0.9, 0.9]),  # High diffuse for metal
+        "specular": Vector3([1.0, 1.0, 1.0])  # High specular for metal
+    },
+    "bed": {
+        "diffuse": Vector3([0.8, 0.8, 0.8]),  # Fabric-like diffuse
+        "specular": Vector3([0.1, 0.1, 0.1])  # Low specular for fabric
+    },
+    "dog": {
+        "diffuse": Vector3([0.8, 0.8, 0.8]),  # Fur-like diffuse
+        "specular": Vector3([0.1, 0.1, 0.1])  # Low specular for fur
+    },
+    "ground": {
+        "diffuse": Vector3([0.8, 0.8, 0.8]),  # Sand-like diffuse
+        "specular": Vector3([0.0, 0.0, 0.0])  # No specular for sand
+    },
+    "skybox": {
+        "diffuse": Vector3([1.0, 1.0, 1.0]),  # Full diffuse for sky
+        "specular": Vector3([0.0, 0.0, 0.0])  # No specular for sky
+    },
+    "cactus": {
+        "diffuse": Vector3([0.7, 0.8, 0.7]),  # Plant-like diffuse
+        "specular": Vector3([0.2, 0.2, 0.2])  # Low specular for plant
+    },
+    "flashlight": {
+        "diffuse": Vector3([0.9, 0.9, 0.9]),  # Metal-like diffuse
+        "specular": Vector3([0.8, 0.8, 0.8])  # High specular for metal
+    }
+}
+
 # Vertex shader code - handles vertex positions, textures, normals and transformations
 # Includes special handling for ground plane tiling and skybox sphere mapping
 vertex_shader_code = """
@@ -28,50 +76,111 @@ layout(location = 2) in vec3 aNormal;
 
 out vec2 TexCoord;
 out vec3 FragPos;
+out vec3 Normal;
+out vec4 vertexColor;
 
 uniform mat4 model;
 uniform mat4 view;
 uniform mat4 projection;
 uniform bool isGround;
 uniform bool isSkybox;
+uniform bool isFirepit;
 
 void main()
 {
     if (isGround) {
-        TexCoord = vec2(aTexCoord.x, 1.0 - aTexCoord.y) * 50.0; // Scale texture coordinates for ground
+        TexCoord = vec2(aTexCoord.x, 1.0 - aTexCoord.y) * 50.0;
     } else if (isSkybox) {
-        TexCoord = vec2(1.0 - aTexCoord.x, aTexCoord.y); // Invert x coordinate for skybox
+        TexCoord = vec2(1.0 - aTexCoord.x, aTexCoord.y);
     } else {
-        TexCoord = vec2(aTexCoord.x, 1.0 - aTexCoord.y); // Normal texture coordinates for other objects
+        TexCoord = vec2(aTexCoord.x, 1.0 - aTexCoord.y);
     }
+    
     FragPos = vec3(model * vec4(aPos, 1.0));
+    Normal = mat3(transpose(inverse(model))) * aNormal;
+    
     if (isSkybox) {
-        vec3 spherePos = normalize(aPos) * 50.0; // Convert cube to sphere and scale
+        vec3 spherePos = normalize(aPos) * 50.0;
         gl_Position = projection * view * model * vec4(spherePos, 1.0);
     } else {
         gl_Position = projection * view * model * vec4(aPos, 1.0);
     }
+
+    // Add emission color for firepit
+    if (isFirepit) {
+        vertexColor = vec4(1.5, 0.7, 0.3, 1.0); // Warm orange glow
+    } else {
+        vertexColor = vec4(1.0);
+    }
 }
 """
 
-# Fragment shader code - handles texturing and transparency
+# Fragment shader code - handles texturing, lighting and transparency
 fragment_shader_code = """
 #version 330 core
 out vec4 FragColor;
 
 in vec2 TexCoord;
 in vec3 FragPos;
+in vec3 Normal;
+in vec4 vertexColor;
 
 uniform sampler2D texture_diffuse1;
+uniform sampler2D texture_spikes;
 uniform bool isGround;
 uniform bool isSkybox;
+uniform bool isCactus;
+uniform bool isFirepit;
+uniform vec3 viewPos;
+uniform vec3 lightPos;  // Campfire position
+uniform vec3 lightColor;  // Campfire color
+uniform vec3 materialDiffuse;  // Material diffuse color
+uniform vec3 materialSpecular;  // Material specular color
 
 void main()
 {
-    vec4 texColor = texture(texture_diffuse1, TexCoord);
-    if(texColor.a < 0.1) // Handle transparency
+    vec4 texColor;
+    if (isCactus) {
+        vec4 baseColor = texture(texture_diffuse1, TexCoord);
+        vec4 spikesColor = texture(texture_spikes, TexCoord);
+        texColor = mix(baseColor, spikesColor, spikesColor.a);
+    } else {
+        texColor = texture(texture_diffuse1, TexCoord);
+    }
+    
+    if(texColor.a < 0.1)
         discard;
-    FragColor = texColor;
+        
+    if(isSkybox) {
+        FragColor = texColor;
+    } else {
+        // Ambient light (very low for night scene)
+        float ambientStrength = 0.8;
+        vec3 ambient = ambientStrength * vec3(0.05, 0.05, 0.1); // Bluish night ambient
+        
+        // Diffuse light from campfire using material properties
+        vec3 norm = normalize(Normal);
+        vec3 lightDir = normalize(lightPos - FragPos);
+        float diff = max(dot(norm, lightDir), 0.0);
+        float distance = length(lightPos - FragPos);
+        float attenuation = 1.0 / (1.0 + 0.045 * distance + 0.0075 * distance * distance);
+        vec3 diffuse = diff * lightColor * materialDiffuse * attenuation * 2.0;
+        
+        // Specular light using material properties
+        vec3 viewDir = normalize(viewPos - FragPos);
+        vec3 reflectDir = reflect(-lightDir, norm);
+        float spec = pow(max(dot(viewDir, reflectDir), 0.0), 32);
+        vec3 specular = spec * lightColor * materialSpecular * attenuation;
+        
+        vec3 result = (ambient + diffuse + specular) * texColor.rgb;
+
+        // Add emission for firepit
+        if (isFirepit) {
+            result += texColor.rgb * vertexColor.rgb * 0.5; // Add glow effect
+        }
+
+        FragColor = vec4(result, texColor.a);
+    }
 }
 """
 
@@ -167,11 +276,13 @@ transformations = {
     "rocks": {"translation": Vector3([5.0, 0.0, 10.0]), "scale": 0.05, "rotation": Vector3([0.0, 0.0, 90.0])},
     "table": {"translation": Vector3([-1.0, -0.35, -1.0]), "scale": 0.75, "rotation": Vector3([0.0, 0.0, 0.0])},
     "chair": {"translation": Vector3([-2.0, -0.35, -1.0]), "scale": 1.0, "rotation": Vector3([0.0, -90.0, 0.0])},
-    "firepit": {"translation": Vector3([8.0, -0.35, 8.0]), "scale": 0.02, "rotation": Vector3([0.0, 0.0, 0.0])},
+    "firepit": {"translation": Vector3([8.0, -0.45, 8.0]), "scale": 0.02, "rotation": Vector3([0.0, 0.0, 0.0])},
     "bed": {"translation": Vector3([-1.0, -0.35, 1.2]), "scale": 0.25, "rotation": Vector3([0.0, -90.0, 0.0])},
     "dog": {"translation": Vector3([10.0, -0.4, 10.0]), "scale": 0.8, "rotation": Vector3([0.0, 135.0, 0.0])},
     "ground": {"translation": Vector3([0.0, -0.5, 0.0]), "scale": 50.0, "rotation": Vector3([0.0, 0.0, 0.0])},
-    "skybox": {"translation": Vector3([0.0, 0.0, 0.0]), "scale": 1.0, "rotation": Vector3([0.0, 0.0, 0.0])}
+    "skybox": {"translation": Vector3([0.0, 0.0, 0.0]), "scale": 1.0, "rotation": Vector3([0.0, 0.0, 0.0])},
+    "cactus": {"translation": Vector3([1.0, -1.0, 5.0]), "scale": 0.1, "rotation": Vector3([0.0, 45.0, 0.0])},
+    "flashlight": {"translation": Vector3([-1.5, 0.2, -1.0]), "scale": 0.02, "rotation": Vector3([0.0, 45.0, 0.0])}
 }
 
 # Camera settings
@@ -326,7 +437,9 @@ def main():
         "bed": load_model("objects/bed/sleeping_bag.obj"),
         "dog": load_model("objects/dog/dog.obj"),
         "ground": ground_vertices,
-        "skybox": generate_sphere_vertices(1.0, 30, 30)  # Generate sphere vertices for skybox
+        "skybox": generate_sphere_vertices(1.0, 30, 30),  # Generate sphere vertices for skybox
+        "cactus": load_model("objects/cactus/cactus.obj"),
+        "flashlight": load_model("objects/flashlight/flashlight.obj")
     }
 
     # Load textures
@@ -340,8 +453,13 @@ def main():
         "bed": load_texture("objects/bed/SleepingBagDiffuse.png"),
         "dog": load_texture("objects/dog/Dog_Tris_Diffuse.png"),
         "ground": load_texture("objects/ground/sand-500-mm-architextures.jpg", True),
-        "skybox": load_texture("objects/sky/clear_night_4k.hdr")
+        "skybox": load_texture("objects/sky/clear_night_4k.hdr"),
+        "cactus": load_texture("objects/cactus/diffuse.png"),
+        "flashlight": load_texture("objects/flashlight/torch_BaseColor.png")
     }
+    
+    # Load cactus spikes texture
+    cactus_spikes_texture = load_texture("objects/cactus/spikes.png")
 
     # Create and setup VAOs/VBOs
     VAOs = glGenVertexArrays(len(models))
@@ -366,7 +484,10 @@ def main():
     projection = Matrix44.perspective_projection(45.0, 1920 / 1080, 0.1, 100.0)
     glUseProgram(shader)
     glUniformMatrix4fv(glGetUniformLocation(shader, "projection"), 1, GL_FALSE, projection)
-    glUniform3f(glGetUniformLocation(shader, "lightPos"), 5.0, 5.0, 5.0)
+
+    # Campfire light properties - stronger orange light
+    campfire_pos = transformations["firepit"]["translation"]
+    campfire_color = Vector3([1.5, 0.7, 0.3])  # Brighter warm orange color
 
     # Main render loop
     while not glfw.window_should_close(window):
@@ -381,12 +502,23 @@ def main():
         # Update view matrix
         view = Matrix44.look_at(camera_pos, camera_pos + camera_front, camera_up)
         glUniformMatrix4fv(glGetUniformLocation(shader, "view"), 1, GL_FALSE, view)
+        
+        # Update lighting uniforms
         glUniform3f(glGetUniformLocation(shader, "viewPos"), camera_pos.x, camera_pos.y, camera_pos.z)
+        glUniform3f(glGetUniformLocation(shader, "lightPos"), campfire_pos.x, campfire_pos.y, campfire_pos.z)
+        glUniform3f(glGetUniformLocation(shader, "lightColor"), campfire_color.x, campfire_color.y, campfire_color.z)
         
         # Render each object
         for i, obj_name in enumerate(models.keys()):
             trans = transformations[obj_name]
             scale_factor = 1.0
+
+            # Set material properties for current object
+            material = materials[obj_name]
+            glUniform3f(glGetUniformLocation(shader, "materialDiffuse"), 
+                       material["diffuse"].x, material["diffuse"].y, material["diffuse"].z)
+            glUniform3f(glGetUniformLocation(shader, "materialSpecular"),
+                       material["specular"].x, material["specular"].y, material["specular"].z)
 
             # Calculate model matrix with separate x, y, z scaling for cabin
             if obj_name == "cabin":
@@ -407,15 +539,23 @@ def main():
             
             glUniformMatrix4fv(glGetUniformLocation(shader, "model"), 1, GL_FALSE, model)
 
-            # Set if this is the ground object or skybox
+            # Set if this is the ground object, skybox, cactus or firepit
             glUniform1i(glGetUniformLocation(shader, "isGround"), 1 if obj_name == "ground" else 0)
             glUniform1i(glGetUniformLocation(shader, "isSkybox"), 1 if obj_name == "skybox" else 0)
+            glUniform1i(glGetUniformLocation(shader, "isCactus"), 1 if obj_name == "cactus" else 0)
+            glUniform1i(glGetUniformLocation(shader, "isFirepit"), 1 if obj_name == "firepit" else 0)
 
-            # Bind VAO and texture
+            # Bind VAO and textures
             glBindVertexArray(VAOs[i])
             glActiveTexture(GL_TEXTURE0)
             glBindTexture(GL_TEXTURE_2D, textures[obj_name])
             glUniform1i(glGetUniformLocation(shader, "texture_diffuse1"), 0)
+            
+            # Bind spikes texture for cactus
+            if obj_name == "cactus":
+                glActiveTexture(GL_TEXTURE1)
+                glBindTexture(GL_TEXTURE_2D, cactus_spikes_texture)
+                glUniform1i(glGetUniformLocation(shader, "texture_spikes"), 1)
 
             # Draw object
             glDrawArrays(GL_TRIANGLES, 0, len(models[obj_name]) // 8)
