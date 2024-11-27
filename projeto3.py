@@ -1,4 +1,4 @@
-# Trabalho 2 - Computação Gráfica
+# Trabalho 3 - Computação Gráfica
 # Alunos: Hiago Vinicius Americo - 11218469, Vítor Beneti Martins - 11877635
 
 # A cena representa o sentimento de solidão, com uma casa isolada no meio do deserto.
@@ -96,6 +96,7 @@ uniform bool isGround;
 uniform bool isSkybox;
 uniform bool isFirepit;
 uniform bool isLanternGlow;
+uniform bool isInsideCabin; // New uniform to check if inside cabin
 
 void main()
 {
@@ -143,6 +144,7 @@ uniform bool isGround;
 uniform bool isSkybox;
 uniform bool isFirepit;
 uniform bool isLanternGlow;
+uniform bool isInsideCabin; // New uniform to check if inside cabin
 uniform vec3 viewPos;
 uniform vec3 lightPos;  // Campfire position
 uniform vec3 lightColor;  // Campfire color
@@ -224,6 +226,11 @@ void main()
         // Add emission for firepit
         if (isFirepit) {
             result += texColor.rgb * vertexColor.rgb * 0.5; // Add glow effect
+        }
+
+        // If inside the cabin, only use cabin light
+        if (isInsideCabin) {
+            result = ambient * texColor.rgb; // Only ambient light for cabin objects
         }
 
         FragColor = vec4(result, texColor.a);
@@ -343,9 +350,29 @@ last_x, last_y = 960, 540
 fov = 45.0
 modo_malha = False
 ambient_strength = 0.2  # Initial ambient light strength
-flashlight_on = True  # Initial state of the flashlight
+flashlight_on = True    # Initial state of the flashlight
+lantern_on = True      # Initial state of the lantern
+campfire_on = True     # Initial state of the campfire
+ambient_on = True      # Initial state of ambient light
+
 diffuse_strength = 1.0  # Initial diffuse reflection strength
 specular_strength = 1.0  # Initial specular reflection strength
+
+def process_campfire_input(window):
+    """Handle campfire movement with arrow keys"""
+    global transformations
+    
+    translation_speed = 0.1
+    campfire = transformations["firepit"]
+    
+    if glfw.get_key(window, glfw.KEY_LEFT) == glfw.PRESS:
+        campfire["translation"].x -= translation_speed
+    if glfw.get_key(window, glfw.KEY_RIGHT) == glfw.PRESS:
+        campfire["translation"].x += translation_speed
+    if glfw.get_key(window, glfw.KEY_UP) == glfw.PRESS:
+        campfire["translation"].z -= translation_speed
+    if glfw.get_key(window, glfw.KEY_DOWN) == glfw.PRESS:
+        campfire["translation"].z += translation_speed
 
 def process_camera_input(window):
     """Handle camera movement with WASD keys"""
@@ -368,6 +395,7 @@ def process_camera_input(window):
     radius = 45  # Slightly smaller than skybox radius
     if new_pos.y >= 0.5 and (new_pos.x**2 + new_pos.y**2 + new_pos.z**2) <= radius**2:
         camera_pos = new_pos
+
 
 def mouse_callback(window, xpos, ypos):
     """Handle mouse movement for camera rotation"""
@@ -399,22 +427,30 @@ def mouse_callback(window, xpos, ypos):
 def process_key_input(window, key, scancode, action, mods):
     """Handle keyboard input for toggling wireframe mode and adjusting ambient light"""
     global modo_malha, ambient_strength, diffuse_strength, specular_strength
+    global flashlight_on, lantern_on, campfire_on, ambient_on
     if action == glfw.PRESS:
         if key == glfw.KEY_P:
             modo_malha = not modo_malha
         elif key == glfw.KEY_KP_ADD or key == glfw.KEY_EQUAL:
-            ambient_strength = min(ambient_strength + 0.1, 1.0)  # Increase ambient light, max 1.0
+            ambient_strength = min(ambient_strength + 0.1, 1.0)
         elif key == glfw.KEY_KP_SUBTRACT or key == glfw.KEY_MINUS:
-            ambient_strength = max(ambient_strength - 0.1, 0.0)  # Decrease ambient light, min 0.0
+            ambient_strength = max(ambient_strength - 0.1, 0.0)
         elif key == glfw.KEY_I:
-            diffuse_strength = min(diffuse_strength + 0.1, 2.0)  # Increase diffuse reflection, max 2.0
+            diffuse_strength = min(diffuse_strength + 0.1, 2.0)
         elif key == glfw.KEY_O:
-            diffuse_strength = max(diffuse_strength - 0.1, 0.0)  # Decrease diffuse reflection, min 0.0
+            diffuse_strength = max(diffuse_strength - 0.1, 0.0)
         elif key == glfw.KEY_K:
-            specular_strength = min(specular_strength + 0.1, 2.0)  # Increase specular reflection, max 2.0
+            specular_strength = min(specular_strength + 0.1, 2.0)
         elif key == glfw.KEY_L:
-            specular_strength = max(specular_strength - 0.1, 0.0)  # Decrease specular reflection, min 0.0
+            lantern_on = not lantern_on
+        elif key == glfw.KEY_F:
+            flashlight_on = not flashlight_on
+        elif key == glfw.KEY_C:
+            campfire_on = not campfire_on
+        elif key == glfw.KEY_Z:
+            ambient_on = not ambient_on
 
+            
 def generate_sphere_vertices(radius=1.0, sectors=1000, stacks=1000):
     """Generate vertices for a sphere (used for skybox)"""
     vertices = []
@@ -612,6 +648,8 @@ def main():
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
 
         process_camera_input(window)
+        process_campfire_input(window)  
+
         if modo_malha:
             glPolygonMode(GL_FRONT_AND_BACK, GL_LINE)
         else:
@@ -625,19 +663,38 @@ def main():
         glUniform3f(glGetUniformLocation(shader, "viewPos"), camera_pos.x, camera_pos.y, camera_pos.z)
         glUniform3f(glGetUniformLocation(shader, "lightPos"), campfire_pos.x, campfire_pos.y, campfire_pos.z)
         glUniform3f(glGetUniformLocation(shader, "lightColor"), campfire_color.x, campfire_color.y, campfire_color.z)
-        glUniform1f(glGetUniformLocation(shader, "ambientStrength"), ambient_strength)
+        # Update ambient light
+        if ambient_on:
+            glUniform1f(glGetUniformLocation(shader, "ambientStrength"), ambient_strength)
+        else:
+            glUniform1f(glGetUniformLocation(shader, "ambientStrength"), 0.0)
         
+        # Update flashlight uniforms
+        # Update flashlight uniforms
+        
+        # Update campfire light uniforms
+        glUniform3f(glGetUniformLocation(shader, "lightPos"), campfire_pos.x, campfire_pos.y, campfire_pos.z)
+        if campfire_on:
+            glUniform3f(glGetUniformLocation(shader, "lightColor"), campfire_color.x, campfire_color.y, campfire_color.z)
+        else:
+            glUniform3f(glGetUniformLocation(shader, "lightColor"), 0.0, 0.0, 0.0)
+
         # Update flashlight uniforms
         glUniform3fv(glGetUniformLocation(shader, "flashlightPos"), 1, flashlight_position)
         glUniform3fv(glGetUniformLocation(shader, "flashlightDir"), 1, flashlight_direction)
-        glUniform3fv(glGetUniformLocation(shader, "flashlightColor"), 1, flashlight_color)
+        if flashlight_on:
+            glUniform3fv(glGetUniformLocation(shader, "flashlightColor"), 1, flashlight_color)
+        else:
+            glUniform3fv(glGetUniformLocation(shader, "flashlightColor"), 1, np.array([0.0, 0.0, 0.0], dtype=np.float32))
         glUniform1f(glGetUniformLocation(shader, "flashlightCutOff"), flashlight_cutoff)
         glUniform1f(glGetUniformLocation(shader, "flashlightOuterCutOff"), flashlight_outer_cutoff)
 
         # Update lantern light uniforms
         glUniform3f(glGetUniformLocation(shader, "lanternLightPos"), lantern_light_pos.x, lantern_light_pos.y, lantern_light_pos.z)
-        glUniform3f(glGetUniformLocation(shader, "lanternLightColor"), lantern_light_color.x, lantern_light_color.y, lantern_light_color.z)
-        
+        if lantern_on:
+            glUniform3f(glGetUniformLocation(shader, "lanternLightColor"), lantern_light_color.x, lantern_light_color.y, lantern_light_color.z)
+        else:
+            glUniform3f(glGetUniformLocation(shader, "lanternLightColor"), 0.0, 0.0, 0.0)
         # Render each object
         for i, obj_name in enumerate(models.keys()):
             trans = transformations[obj_name]
