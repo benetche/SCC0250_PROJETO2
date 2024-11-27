@@ -7,6 +7,8 @@
 
 # Controles: WASD - Movimentos da câmera
 # P - ativa/desativa o modo malha
+# + - aumenta a intensidade da luz ambiente
+# - - diminui a intensidade da luz ambiente
 
 
 import glfw
@@ -55,10 +57,6 @@ materials = {
     "skybox": {
         "diffuse": Vector3([1.0, 1.0, 1.0]),  # Full diffuse for sky
         "specular": Vector3([0.0, 0.0, 0.0])  # No specular for sky
-    },
-    "cactus": {
-        "diffuse": Vector3([0.7, 0.8, 0.7]),  # Plant-like diffuse
-        "specular": Vector3([0.2, 0.2, 0.2])  # Low specular for plant
     },
     "flashlight": {
         "diffuse": Vector3([0.9, 0.9, 0.9]),  # Metal-like diffuse
@@ -126,27 +124,26 @@ in vec3 Normal;
 in vec4 vertexColor;
 
 uniform sampler2D texture_diffuse1;
-uniform sampler2D texture_spikes;
 uniform bool isGround;
 uniform bool isSkybox;
-uniform bool isCactus;
 uniform bool isFirepit;
 uniform vec3 viewPos;
 uniform vec3 lightPos;  // Campfire position
 uniform vec3 lightColor;  // Campfire color
 uniform vec3 materialDiffuse;  // Material diffuse color
 uniform vec3 materialSpecular;  // Material specular color
+uniform float ambientStrength;  // Ambient light strength
+
+// Flashlight uniforms
+uniform vec3 flashlightPos;      // Flashlight position
+uniform vec3 flashlightDir;      // Flashlight beam direction
+uniform vec3 flashlightColor;    // Flashlight light color
+uniform float flashlightCutOff;  // Flashlight cone angle (cosine)
+uniform float flashlightOuterCutOff; // Outer angle of the cone (cosine)
 
 void main()
 {
-    vec4 texColor;
-    if (isCactus) {
-        vec4 baseColor = texture(texture_diffuse1, TexCoord);
-        vec4 spikesColor = texture(texture_spikes, TexCoord);
-        texColor = mix(baseColor, spikesColor, spikesColor.a);
-    } else {
-        texColor = texture(texture_diffuse1, TexCoord);
-    }
+    vec4 texColor = texture(texture_diffuse1, TexCoord);
     
     if(texColor.a < 0.1)
         discard;
@@ -155,7 +152,6 @@ void main()
         FragColor = texColor;
     } else {
         // Ambient light (very low for night scene)
-        float ambientStrength = 0.8;
         vec3 ambient = ambientStrength * vec3(0.05, 0.05, 0.1); // Bluish night ambient
         
         // Diffuse light from campfire using material properties
@@ -172,7 +168,26 @@ void main()
         float spec = pow(max(dot(viewDir, reflectDir), 0.0), 32);
         vec3 specular = spec * lightColor * materialSpecular * attenuation;
         
-        vec3 result = (ambient + diffuse + specular) * texColor.rgb;
+        // Flashlight lighting calculation
+        vec3 flashlightEffect = vec3(0.0);
+        vec3 flashlightLightDir = normalize(flashlightPos - FragPos);
+        float theta = dot(flashlightLightDir, normalize(-flashlightDir));
+
+        if(theta > flashlightOuterCutOff) {
+            // Inside the cone
+            float epsilon = flashlightCutOff - flashlightOuterCutOff;
+            float intensity = clamp((theta - flashlightOuterCutOff) / epsilon, 0.0, 1.0);
+            
+            // Distance-based attenuation
+            float flashlightDistance = length(flashlightPos - FragPos);
+            float flashlightAttenuation = 1.0 / (1.0 + 0.045 * flashlightDistance + 0.0075 * flashlightDistance * flashlightDistance);
+            
+            vec3 flashlightDiffuse = intensity * flashlightColor * materialDiffuse * flashlightAttenuation;
+            vec3 flashlightSpecular = intensity * flashlightColor * materialSpecular * flashlightAttenuation;
+            flashlightEffect = flashlightDiffuse + flashlightSpecular;
+        }
+
+        vec3 result = (ambient + diffuse + specular + flashlightEffect) * texColor.rgb;
 
         // Add emission for firepit
         if (isFirepit) {
@@ -272,17 +287,16 @@ def load_model(path):
 
 # Initial transformations for each object in the scene
 transformations = {
-    "cabin": {"translation": Vector3([0.0, -0.45, 0.0]), "scale": 0.5, "rotation": Vector3([0.0, 0.0, 0.0]), "scale_xyz": Vector3([1.5, 1.0, 1.0])},
+    "cabin": {"translation": Vector3([0.0, -0.45, 0.0]), "scale": 0.5, "rotation": Vector3([0.0, -90.0, 0.0]), "scale_xyz": Vector3([1.5, 1.0, 1.0])},
     "rocks": {"translation": Vector3([5.0, 0.0, 10.0]), "scale": 0.05, "rotation": Vector3([0.0, 0.0, 90.0])},
     "table": {"translation": Vector3([-1.0, -0.35, -1.0]), "scale": 0.75, "rotation": Vector3([0.0, 0.0, 0.0])},
     "chair": {"translation": Vector3([-2.0, -0.35, -1.0]), "scale": 1.0, "rotation": Vector3([0.0, -90.0, 0.0])},
-    "firepit": {"translation": Vector3([8.0, -0.45, 8.0]), "scale": 0.02, "rotation": Vector3([0.0, 0.0, 0.0])},
+    "firepit": {"translation": Vector3([10.0, -0.45, 15.0]), "scale": 0.02, "rotation": Vector3([0.0, 0.0, 0.0])},
     "bed": {"translation": Vector3([-1.0, -0.35, 1.2]), "scale": 0.25, "rotation": Vector3([0.0, -90.0, 0.0])},
     "dog": {"translation": Vector3([10.0, -0.4, 10.0]), "scale": 0.8, "rotation": Vector3([0.0, 135.0, 0.0])},
     "ground": {"translation": Vector3([0.0, -0.5, 0.0]), "scale": 50.0, "rotation": Vector3([0.0, 0.0, 0.0])},
     "skybox": {"translation": Vector3([0.0, 0.0, 0.0]), "scale": 1.0, "rotation": Vector3([0.0, 0.0, 0.0])},
-    "cactus": {"translation": Vector3([1.0, -1.0, 5.0]), "scale": 0.1, "rotation": Vector3([0.0, 45.0, 0.0])},
-    "flashlight": {"translation": Vector3([-1.5, 0.2, -1.0]), "scale": 0.02, "rotation": Vector3([0.0, 45.0, 0.0])}
+    "flashlight": {"translation": Vector3([-0.92, 0.2, -0.75]), "scale": 0.02, "rotation": Vector3([0.0, -95.0, 0.0])}
 }
 
 # Camera settings
@@ -294,6 +308,7 @@ first_mouse = True
 last_x, last_y = 960, 540
 fov = 45.0
 modo_malha = False
+ambient_strength = 0.2  # Initial ambient light strength
 
 def process_camera_input(window):
     """Handle camera movement with WASD keys"""
@@ -345,11 +360,15 @@ def mouse_callback(window, xpos, ypos):
     camera_front = vector.normalize(front)
 
 def process_key_input(window, key, scancode, action, mods):
-    """Handle keyboard input for toggling wireframe mode"""
-    global modo_malha
+    """Handle keyboard input for toggling wireframe mode and adjusting ambient light"""
+    global modo_malha, ambient_strength
     if action == glfw.PRESS:
         if key == glfw.KEY_P:
             modo_malha = not modo_malha
+        elif key == glfw.KEY_KP_ADD or key == glfw.KEY_EQUAL:
+            ambient_strength = min(ambient_strength + 0.1, 1.0)  # Increase ambient light, max 1.0
+        elif key == glfw.KEY_KP_SUBTRACT or key == glfw.KEY_MINUS:
+            ambient_strength = max(ambient_strength - 0.1, 0.0)  # Decrease ambient light, min 0.0
 
 def generate_sphere_vertices(radius=1.0, sectors=1000, stacks=1000):
     """Generate vertices for a sphere (used for skybox)"""
@@ -391,7 +410,7 @@ def generate_sphere_vertices(radius=1.0, sectors=1000, stacks=1000):
 
 def main():
     """Main rendering function"""
-    global camera_pos, camera_front, camera_up
+    global camera_pos, camera_front, camera_up, ambient_strength
 
     # Initialize GLFW and create window
     if not glfw.init():
@@ -438,7 +457,6 @@ def main():
         "dog": load_model("objects/dog/dog.obj"),
         "ground": ground_vertices,
         "skybox": generate_sphere_vertices(1.0, 30, 30),  # Generate sphere vertices for skybox
-        "cactus": load_model("objects/cactus/cactus.obj"),
         "flashlight": load_model("objects/flashlight/flashlight.obj")
     }
 
@@ -454,12 +472,8 @@ def main():
         "dog": load_texture("objects/dog/Dog_Tris_Diffuse.png"),
         "ground": load_texture("objects/ground/sand-500-mm-architextures.jpg", True),
         "skybox": load_texture("objects/sky/clear_night_4k.hdr"),
-        "cactus": load_texture("objects/cactus/diffuse.png"),
         "flashlight": load_texture("objects/flashlight/torch_BaseColor.png")
     }
-    
-    # Load cactus spikes texture
-    cactus_spikes_texture = load_texture("objects/cactus/spikes.png")
 
     # Create and setup VAOs/VBOs
     VAOs = glGenVertexArrays(len(models))
@@ -489,6 +503,12 @@ def main():
     campfire_pos = transformations["firepit"]["translation"]
     campfire_color = Vector3([1.5, 0.7, 0.3])  # Brighter warm orange color
 
+    # Flashlight position and direction
+    flashlight_position = np.array([-0.92, 0.4, -0.6], dtype=np.float32)  # Adjust as needed
+    flashlight_direction = np.array([0.2, 0.0, 2.0], dtype=np.float32)  # Light direction (normalized vector) - rotated by 180 degrees
+    flashlight_color = np.array([1.0, 1.0, 1.0], dtype=np.float32)  # White light
+    flashlight_cutoff = np.cos(np.radians(12.5))  # Inner cone angle
+    flashlight_outer_cutoff = np.cos(np.radians(17.5))  # Outer cone angle
     # Main render loop
     while not glfw.window_should_close(window):
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
@@ -507,6 +527,14 @@ def main():
         glUniform3f(glGetUniformLocation(shader, "viewPos"), camera_pos.x, camera_pos.y, camera_pos.z)
         glUniform3f(glGetUniformLocation(shader, "lightPos"), campfire_pos.x, campfire_pos.y, campfire_pos.z)
         glUniform3f(glGetUniformLocation(shader, "lightColor"), campfire_color.x, campfire_color.y, campfire_color.z)
+        glUniform1f(glGetUniformLocation(shader, "ambientStrength"), ambient_strength)
+        
+        # Update flashlight uniforms
+        glUniform3fv(glGetUniformLocation(shader, "flashlightPos"), 1, flashlight_position)
+        glUniform3fv(glGetUniformLocation(shader, "flashlightDir"), 1, flashlight_direction)
+        glUniform3fv(glGetUniformLocation(shader, "flashlightColor"), 1, flashlight_color)
+        glUniform1f(glGetUniformLocation(shader, "flashlightCutOff"), flashlight_cutoff)
+        glUniform1f(glGetUniformLocation(shader, "flashlightOuterCutOff"), flashlight_outer_cutoff)
         
         # Render each object
         for i, obj_name in enumerate(models.keys()):
