@@ -8,7 +8,11 @@
 # Controles: WASD - Movimentos da câmera
 # P - ativa/desativa o modo malha
 # + - aumenta a intensidade da luz ambiente
-# - - diminui a intensidade da luz ambiente
+# - diminui a intensidade da luz ambiente
+# I - aumenta a reflexão difusa
+# O - diminui a reflexão difusa
+# K - aumenta a reflexão especular
+# L - diminui a reflexão especular
 
 
 import glfw
@@ -61,6 +65,14 @@ materials = {
     "flashlight": {
         "diffuse": Vector3([0.9, 0.9, 0.9]),  # Metal-like diffuse
         "specular": Vector3([0.8, 0.8, 0.8])  # High specular for metal
+    },
+    "lantern": {
+        "diffuse": Vector3([0.9, 0.9, 0.9]),  # Metal-like diffuse
+        "specular": Vector3([0.8, 0.8, 0.8])  # High specular for metal
+    },
+    "lantern_glow": {
+        "diffuse": Vector3([1.0, 1.0, 0.0]),  # Yellow glow
+        "specular": Vector3([1.0, 1.0, 0.0])  # Yellow specular
     }
 }
 
@@ -83,6 +95,7 @@ uniform mat4 projection;
 uniform bool isGround;
 uniform bool isSkybox;
 uniform bool isFirepit;
+uniform bool isLanternGlow;
 
 void main()
 {
@@ -104,9 +117,11 @@ void main()
         gl_Position = projection * view * model * vec4(aPos, 1.0);
     }
 
-    // Add emission color for firepit
+    // Add emission color for firepit and lantern glow
     if (isFirepit) {
         vertexColor = vec4(1.5, 0.7, 0.3, 1.0); // Warm orange glow
+    } else if (isLanternGlow) {
+        vertexColor = vec4(1.0, 1.0, 0.0, 0.3); // Yellow glow with transparency
     } else {
         vertexColor = vec4(1.0);
     }
@@ -127,6 +142,7 @@ uniform sampler2D texture_diffuse1;
 uniform bool isGround;
 uniform bool isSkybox;
 uniform bool isFirepit;
+uniform bool isLanternGlow;
 uniform vec3 viewPos;
 uniform vec3 lightPos;  // Campfire position
 uniform vec3 lightColor;  // Campfire color
@@ -141,15 +157,21 @@ uniform vec3 flashlightColor;    // Flashlight light color
 uniform float flashlightCutOff;  // Flashlight cone angle (cosine)
 uniform float flashlightOuterCutOff; // Outer angle of the cone (cosine)
 
+// Lantern light properties
+uniform vec3 lanternLightPos;    // Lantern light position
+uniform vec3 lanternLightColor;  // Lantern light color
+
 void main()
 {
     vec4 texColor = texture(texture_diffuse1, TexCoord);
     
-    if(texColor.a < 0.1)
+    if(texColor.a < 0.1 && !isLanternGlow)
         discard;
         
     if(isSkybox) {
         FragColor = texColor;
+    } else if(isLanternGlow) {
+        FragColor = vertexColor;
     } else {
         // Ambient light (very low for night scene)
         vec3 ambient = ambientStrength * vec3(0.05, 0.05, 0.1); // Bluish night ambient
@@ -187,7 +209,17 @@ void main()
             flashlightEffect = flashlightDiffuse + flashlightSpecular;
         }
 
-        vec3 result = (ambient + diffuse + specular + flashlightEffect) * texColor.rgb;
+        // Lantern lighting calculation
+        vec3 lanternEffect = vec3(0.0);
+        vec3 lanternLightDir = normalize(lanternLightPos - FragPos);
+        float lanternDistance = length(lanternLightPos - FragPos);
+        float lanternAttenuation = 1.0 / (1.0 + 0.045 * lanternDistance + 0.0075 * lanternDistance * lanternDistance);
+        float lanternDiff = max(dot(norm, lanternLightDir), 0.0);
+        vec3 lanternDiffuse = lanternDiff * lanternLightColor * materialDiffuse * lanternAttenuation;
+        vec3 lanternSpecular = spec * lanternLightColor * materialSpecular * lanternAttenuation;
+        lanternEffect = lanternDiffuse + lanternSpecular;
+
+        vec3 result = (ambient + diffuse + specular + flashlightEffect + lanternEffect) * texColor.rgb;
 
         // Add emission for firepit
         if (isFirepit) {
@@ -296,7 +328,9 @@ transformations = {
     "dog": {"translation": Vector3([10.0, -0.4, 10.0]), "scale": 0.8, "rotation": Vector3([0.0, 135.0, 0.0])},
     "ground": {"translation": Vector3([0.0, -0.5, 0.0]), "scale": 50.0, "rotation": Vector3([0.0, 0.0, 0.0])},
     "skybox": {"translation": Vector3([0.0, 0.0, 0.0]), "scale": 1.0, "rotation": Vector3([0.0, 0.0, 0.0])},
-    "flashlight": {"translation": Vector3([-0.92, 0.2, -0.75]), "scale": 0.02, "rotation": Vector3([0.0, -95.0, 0.0])}
+    "flashlight": {"translation": Vector3([-0.92, 0.2, -0.75]), "scale": 0.02, "rotation": Vector3([0.0, -95.0, 0.0])},
+    "lantern": {"translation": Vector3([2.0, -0.2, 0.0]), "scale": 0.1, "rotation": Vector3([0.0, 0.0, 0.0])},
+    "lantern_glow": {"translation": Vector3([2.0, -0.2, 0.0]), "scale": 0.15, "rotation": Vector3([0.0, 0.0, 0.0])}  # Slightly larger scale for glow
 }
 
 # Camera settings
@@ -309,6 +343,9 @@ last_x, last_y = 960, 540
 fov = 45.0
 modo_malha = False
 ambient_strength = 0.2  # Initial ambient light strength
+flashlight_on = True  # Initial state of the flashlight
+diffuse_strength = 1.0  # Initial diffuse reflection strength
+specular_strength = 1.0  # Initial specular reflection strength
 
 def process_camera_input(window):
     """Handle camera movement with WASD keys"""
@@ -361,7 +398,7 @@ def mouse_callback(window, xpos, ypos):
 
 def process_key_input(window, key, scancode, action, mods):
     """Handle keyboard input for toggling wireframe mode and adjusting ambient light"""
-    global modo_malha, ambient_strength
+    global modo_malha, ambient_strength, diffuse_strength, specular_strength
     if action == glfw.PRESS:
         if key == glfw.KEY_P:
             modo_malha = not modo_malha
@@ -369,6 +406,14 @@ def process_key_input(window, key, scancode, action, mods):
             ambient_strength = min(ambient_strength + 0.1, 1.0)  # Increase ambient light, max 1.0
         elif key == glfw.KEY_KP_SUBTRACT or key == glfw.KEY_MINUS:
             ambient_strength = max(ambient_strength - 0.1, 0.0)  # Decrease ambient light, min 0.0
+        elif key == glfw.KEY_I:
+            diffuse_strength = min(diffuse_strength + 0.1, 2.0)  # Increase diffuse reflection, max 2.0
+        elif key == glfw.KEY_O:
+            diffuse_strength = max(diffuse_strength - 0.1, 0.0)  # Decrease diffuse reflection, min 0.0
+        elif key == glfw.KEY_K:
+            specular_strength = min(specular_strength + 0.1, 2.0)  # Increase specular reflection, max 2.0
+        elif key == glfw.KEY_L:
+            specular_strength = max(specular_strength - 0.1, 0.0)  # Decrease specular reflection, min 0.0
 
 def generate_sphere_vertices(radius=1.0, sectors=1000, stacks=1000):
     """Generate vertices for a sphere (used for skybox)"""
@@ -410,7 +455,7 @@ def generate_sphere_vertices(radius=1.0, sectors=1000, stacks=1000):
 
 def main():
     """Main rendering function"""
-    global camera_pos, camera_front, camera_up, ambient_strength
+    global camera_pos, camera_front, camera_up, ambient_strength, diffuse_strength, specular_strength
 
     # Initialize GLFW and create window
     if not glfw.init():
@@ -445,6 +490,50 @@ def main():
         -1.0, 0.0,  1.0,   0.0, 1.0,         0.0, 1.0, 0.0,
     ], dtype=np.float32)
 
+    # Create cube vertices for lantern glow
+    lantern_glow_vertices = np.array([
+        # Front face
+        -0.65, -0.65,  0.65,   0.0, 0.0,   0.0, 0.0, 1.0,
+         0.65, -0.65,  0.65,   1.0, 0.0,   0.0, 0.0, 1.0,
+         0.65,  0.65,  0.65,   1.0, 1.0,   0.0, 0.0, 1.0,
+        -0.65, -0.65,  0.65,   0.0, 0.0,   0.0, 0.0, 1.0,
+         0.65,  0.65,  0.65,   1.0, 1.0,   0.0, 0.0, 1.0,
+        -0.65,  0.65,  0.65,   0.0, 1.0,   0.0, 0.0, 1.0,
+        # Back face
+        -0.65, -0.65, -0.65,   0.0, 0.0,   0.0, 0.0, -1.0,
+         0.65, -0.65, -0.65,   1.0, 0.0,   0.0, 0.0, -1.0,
+         0.65,  0.65, -0.65,   1.0, 1.0,   0.0, 0.0, -1.0,
+        -0.65, -0.65, -0.65,   0.0, 0.0,   0.0, 0.0, -1.0,
+         0.65,  0.65, -0.65,   1.0, 1.0,   0.0, 0.0, -1.0,
+        -0.65,  0.65, -0.65,   0.0, 1.0,   0.0, 0.0, -1.0,
+        # Top face
+        -0.65,  0.65, -0.65,   0.0, 0.0,   0.0, 1.0, 0.0,
+         0.65,  0.65, -0.65,   1.0, 0.0,   0.0, 1.0, 0.0,
+         0.65,  0.65,  0.65,   1.0, 1.0,   0.0, 1.0, 0.0,
+        -0.65,  0.65, -0.65,   0.0, 0.0,   0.0, 1.0, 0.0,
+         0.65,  0.65,  0.65,   1.0, 1.0,   0.0, 1.0, 0.0,
+        -0.65,  0.65,  0.65,   0.0, 1.0,   0.0, 1.0, 0.0,
+        # Bottom face
+        -0.65, -0.65, -0.65,   0.0, 0.0,   0.0, -1.0, 0.0,
+         0.65, -0.65, -0.65,   1.0, 0.0,   0.0, -1.0, 0.0,
+         0.65, -0.65,  0.65,   1.0, 1.0,   0.0, -1.0, 0.0,
+        -0.65, -0.65, -0.65,   0.0, 0.0,   0.0, -1.0, 0.0,
+         0.65, -0.65,  0.65,   1.0, 1.0,   0.0, -1.0, 0.0,
+        -0.65, -0.65,  0.65,   0.0, 1.0,   0.0, -1.0, 0.0,
+        # Right face
+         0.65, -0.65, -0.65,   0.0, 0.0,   1.0, 0.0, 0.0,
+         0.65,  0.65, -0.65,   1.0, 0.0,   1.0, 0.0, 0.0,
+         0.65,  0.65,  0.65,   1.0, 1.0,   1.0, 0.0, 0.0,
+         0.65, -0.65, -0.65,   0.0, 0.0,   1.0, 0.0, 0.0,
+        # Left face
+        -0.65, -0.65, -0.65,   0.0, 0.0,   -1.0, 0.0, 0.0,
+        -0.65,  0.65, -0.65,   1.0, 0.0,   -1.0, 0.0, 0.0,
+        -0.65,  0.65,  0.65,   1.0, 1.0,   -1.0, 0.0, 0.0,
+        -0.65, -0.65, -0.65,   0.0, 0.0,   -1.0, 0.0, 0.0,
+         0.65, -0.65,  0.65,   1.0, 1.0,   1.0, 0.0, 0.0,
+        -0.65,  0.65,  0.65,   0.0, 1.0,   -1.0, 0.0, 0.0,
+    ], dtype=np.float32)
+
     # Load models
     rock_model = load_model("objects/rock/rock.obj")
     models = {
@@ -457,7 +546,9 @@ def main():
         "dog": load_model("objects/dog/dog.obj"),
         "ground": ground_vertices,
         "skybox": generate_sphere_vertices(1.0, 30, 30),  # Generate sphere vertices for skybox
-        "flashlight": load_model("objects/flashlight/flashlight.obj")
+        "flashlight": load_model("objects/flashlight/flashlight.obj"),
+        "lantern": load_model("objects/lantern/lantern.obj"),
+        "lantern_glow": lantern_glow_vertices  # Add lantern glow vertices
     }
 
     # Load textures
@@ -472,7 +563,9 @@ def main():
         "dog": load_texture("objects/dog/Dog_Tris_Diffuse.png"),
         "ground": load_texture("objects/ground/sand-500-mm-architextures.jpg", True),
         "skybox": load_texture("objects/sky/clear_night_4k.hdr"),
-        "flashlight": load_texture("objects/flashlight/torch_BaseColor.png")
+        "flashlight": load_texture("objects/flashlight/torch_BaseColor.png"),
+        "lantern": load_texture("objects/lantern/lantern_base.png"),
+        "lantern_glow": 0  # No texture for lantern glow
     }
 
     # Create and setup VAOs/VBOs
@@ -509,6 +602,11 @@ def main():
     flashlight_color = np.array([1.0, 1.0, 1.0], dtype=np.float32)  # White light
     flashlight_cutoff = np.cos(np.radians(12.5))  # Inner cone angle
     flashlight_outer_cutoff = np.cos(np.radians(17.5))  # Outer cone angle
+
+    # Lantern light properties
+    lantern_light_pos = transformations["lantern"]["translation"]
+    lantern_light_color = Vector3([1.0, 1.0, 0.0])  # Yellow light
+
     # Main render loop
     while not glfw.window_should_close(window):
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
@@ -535,6 +633,10 @@ def main():
         glUniform3fv(glGetUniformLocation(shader, "flashlightColor"), 1, flashlight_color)
         glUniform1f(glGetUniformLocation(shader, "flashlightCutOff"), flashlight_cutoff)
         glUniform1f(glGetUniformLocation(shader, "flashlightOuterCutOff"), flashlight_outer_cutoff)
+
+        # Update lantern light uniforms
+        glUniform3f(glGetUniformLocation(shader, "lanternLightPos"), lantern_light_pos.x, lantern_light_pos.y, lantern_light_pos.z)
+        glUniform3f(glGetUniformLocation(shader, "lanternLightColor"), lantern_light_color.x, lantern_light_color.y, lantern_light_color.z)
         
         # Render each object
         for i, obj_name in enumerate(models.keys()):
@@ -544,9 +646,9 @@ def main():
             # Set material properties for current object
             material = materials[obj_name]
             glUniform3f(glGetUniformLocation(shader, "materialDiffuse"), 
-                       material["diffuse"].x, material["diffuse"].y, material["diffuse"].z)
+                       material["diffuse"].x * diffuse_strength, material["diffuse"].y * diffuse_strength, material["diffuse"].z * diffuse_strength)
             glUniform3f(glGetUniformLocation(shader, "materialSpecular"),
-                       material["specular"].x, material["specular"].y, material["specular"].z)
+                       material["specular"].x * specular_strength, material["specular"].y * specular_strength, material["specular"].z * specular_strength)
 
             # Calculate model matrix with separate x, y, z scaling for cabin
             if obj_name == "cabin":
@@ -567,11 +669,11 @@ def main():
             
             glUniformMatrix4fv(glGetUniformLocation(shader, "model"), 1, GL_FALSE, model)
 
-            # Set if this is the ground object, skybox, cactus or firepit
+            # Set if this is the ground object, skybox, firepit, or lantern glow
             glUniform1i(glGetUniformLocation(shader, "isGround"), 1 if obj_name == "ground" else 0)
             glUniform1i(glGetUniformLocation(shader, "isSkybox"), 1 if obj_name == "skybox" else 0)
-            glUniform1i(glGetUniformLocation(shader, "isCactus"), 1 if obj_name == "cactus" else 0)
             glUniform1i(glGetUniformLocation(shader, "isFirepit"), 1 if obj_name == "firepit" else 0)
+            glUniform1i(glGetUniformLocation(shader, "isLanternGlow"), 1 if obj_name == "lantern_glow" else 0)
 
             # Bind VAO and textures
             glBindVertexArray(VAOs[i])
@@ -579,11 +681,6 @@ def main():
             glBindTexture(GL_TEXTURE_2D, textures[obj_name])
             glUniform1i(glGetUniformLocation(shader, "texture_diffuse1"), 0)
             
-            # Bind spikes texture for cactus
-            if obj_name == "cactus":
-                glActiveTexture(GL_TEXTURE1)
-                glBindTexture(GL_TEXTURE_2D, cactus_spikes_texture)
-                glUniform1i(glGetUniformLocation(shader, "texture_spikes"), 1)
 
             # Draw object
             glDrawArrays(GL_TRIANGLES, 0, len(models[obj_name]) // 8)
